@@ -1,0 +1,9 @@
+# Ignore all .pyc files
+*.pyc
+*.7z
+*.pth
+
+# Ignore __pycache__ folders
+__pycache__/
+
+!.gitignore
