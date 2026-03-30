@@ -14,7 +14,7 @@ slicer.util.pip_install("opencv-python")
 
 ## Model Weights
 
-The depth estimation model (`6Level-ex-vivo-G_AB.pth`) is not included in version control due to file size. Place it in the `1.0/` directory before use.
+The depth estimation model is currently included.
 
 ## Usage
 

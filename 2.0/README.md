@@ -18,7 +18,7 @@ slicer.util.pip_install("Pillow")
 
 ## Model Weights
 
-The depth estimation model is currently not included in version control due to file size. Place it in `2.0/Models/` before use.
+The depth estimation model is currently included.
 
 ## Usage
 

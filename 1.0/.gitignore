@@ -1,7 +1,8 @@
 # Ignore all .pyc files
 *.pyc
 *.7z
-*.pth
+
+# *.pth
 
 # Ignore __pycache__ folders
 __pycache__/
