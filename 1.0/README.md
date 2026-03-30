@@ -40,24 +40,6 @@ The depth estimation model is currently included.
 
 Click **Reload** to reset the module and start with a new dataset.
 
-## File Structure
-
-```
-1.0/
-├── Airway_Stenosis.py       # Main Slicer module
-├── models.py                # cGAN model architectures (GeneratorResNet, Discriminator)
-├── datasets.py              # Training dataset class
-├── utils.py                 # Training utilities (ReplayBuffer, LambdaLR)
-├── 6Level-ex-vivo-G_AB.pth  # Pre-trained model weights (not in repo)
-├── Resources/
-│   ├── Icons/
-│   │   └── Airway_Stenosis.png
-│   └── UI/
-│       └── Airway_Stenosis.ui
-└── ManualOfModule.docx       # Original module manual
-```
-
 ## Notes
 
-- Save the Slicer scene after each analysis for scientific record-keeping.
 - The stenosis index (SI) is calculated as: `SI = 1 - (expiration_pixels / inspiration_pixels)`, where pixel counts are determined by thresholding the estimated depth maps.
