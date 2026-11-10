@@ -18,6 +18,13 @@ The initial implementation. Supports loading bronchoscopic image files, ground t
 
 A rewrite with live bronchoscope support. Features real-time depth estimation from a video feed via OpenIGTLink, snapshot capture, interactive threshold sliders, and an auto-updating stenosis index display.
 
+## Citation
+
+A. Banach, M. Naito, F. King, F. Masaki, H. Tsukada, N. Hata. "Computer-based
+airway stenosis quantification from bronchoscopic images: preliminary results
+from a feasibility trial." *International Journal of Computer Assisted Radiology
+and Surgery* 18(4) (2023): 707–713. https://doi.org/10.1007/s11548-022-02808-8
+
 ## License
 
 This project is licensed under the [BSD 3-Clause License](LICENSE).
