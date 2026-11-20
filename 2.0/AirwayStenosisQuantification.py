@@ -10,6 +10,7 @@ if moduleDir not in sys.path:
     sys.path.append(moduleDir)
 
 import numpy as np
+from StenosisUtils.image_utils import toGrayscale2D
 
 
 class AirwayStenosisQuantification(ScriptedLoadableModule): # type: ignore
@@ -49,8 +50,9 @@ class AirwayStenosisQuantificationWidget(ScriptedLoadableModuleWidget): # type: 
             self.parent.show()
 
     def onReload(self, moduleName="AirwayStenosisQuantification"):
-        if 'StenosisUtils.depth_estimation' in sys.modules:
-            del sys.modules['StenosisUtils.depth_estimation']
+        for mod in ('StenosisUtils.depth_estimation', 'StenosisUtils.image_utils'):
+            if mod in sys.modules:
+                del sys.modules[mod]
 
         self._setNodeObserver(None, "bronchVideo")
         self._setNodeObserver(None, "expiration")
@@ -119,7 +121,7 @@ class AirwayStenosisQuantificationWidget(ScriptedLoadableModuleWidget): # type: 
         self.expirationSelector = slicer.qMRMLNodeComboBox()
         self.expirationSelector.nodeTypes = ["vtkMRMLScalarVolumeNode"]
         self.expirationSelector.selectNodeUponCreation = False
-        self.expirationSelector.addEnabled = False
+        self.expirationSelector.addEnabled = True
         self.expirationSelector.removeEnabled = False
         self.expirationSelector.noneEnabled = True
         self.expirationSelector.noneDisplay = "Select Expiration Image..."
@@ -131,7 +133,7 @@ class AirwayStenosisQuantificationWidget(ScriptedLoadableModuleWidget): # type: 
         self.inspirationSelector = slicer.qMRMLNodeComboBox()
         self.inspirationSelector.nodeTypes = ["vtkMRMLScalarVolumeNode"]
         self.inspirationSelector.selectNodeUponCreation = False
-        self.inspirationSelector.addEnabled = False
+        self.inspirationSelector.addEnabled = True
         self.inspirationSelector.removeEnabled = False
         self.inspirationSelector.noneEnabled = True
         self.inspirationSelector.noneDisplay = "Select Inspiration Image..."
@@ -212,12 +214,8 @@ class AirwayStenosisQuantificationWidget(ScriptedLoadableModuleWidget): # type: 
             from PIL import Image
             slicer.app.processEvents()
 
-            input_array = slicer.util.arrayFromVolume(node)
-            if input_array.ndim == 4:
-                input_array = np.mean(input_array[..., :3], axis=-1).astype(np.uint8)
-            if input_array.ndim == 3:
-                input_array = input_array[0]
-            pil_image = Image.fromarray(input_array.astype(np.uint8), mode='L')
+            input_array = toGrayscale2D(slicer.util.arrayFromVolume(node))
+            pil_image = Image.fromarray(input_array, mode='L')
 
             depth_image = self.logic.depth_estimator.generateDepth(pil_image)
             output_name = node.GetName() + "_Depth"
@@ -238,16 +236,12 @@ class AirwayStenosisQuantificationWidget(ScriptedLoadableModuleWidget): # type: 
             return
 
         source_array = slicer.util.arrayFromVolume(sourceNode)
-        if source_array.ndim == 3 and source_array.shape[0] == 1:
-            gray_array = source_array
-        elif source_array.ndim == 4:
-            gray_array = np.mean(source_array[..., :3], axis=-1).astype(np.uint8)
-            if gray_array.ndim == 2:
-                gray_array = gray_array[np.newaxis, ...]
-        elif source_array.ndim == 3 and source_array.shape[0] > 1:
-            gray_array = np.mean(source_array, axis=0, keepdims=True).astype(np.uint8)
+        if source_array.ndim == 3 and 1 not in source_array.shape:
+            # Multi-slice scalar volume: average slices
+            gray_array = np.mean(source_array, axis=0).astype(np.uint8)
         else:
-            gray_array = source_array.copy()
+            gray_array = toGrayscale2D(source_array)
+        gray_array = gray_array[np.newaxis, ...]
 
         targetNode.SetIJKToRASDirections(1,0,0, 0,1,0, 0,0,1)
         slicer.util.updateVolumeFromArray(targetNode, gray_array)
@@ -441,12 +435,8 @@ class AirwayStenosisQuantificationWidget(ScriptedLoadableModuleWidget): # type: 
         """
         from PIL import Image
 
-        input_array = slicer.util.arrayFromVolume(inputVolumeNode)
-        if input_array.ndim == 4:
-            input_array = np.mean(input_array[..., :3], axis=-1).astype(np.uint8)
-        if input_array.ndim == 3:
-            input_array = input_array[0]
-        pil_image = Image.fromarray(input_array.astype(np.uint8), mode='L')
+        input_array = toGrayscale2D(slicer.util.arrayFromVolume(inputVolumeNode))
+        pil_image = Image.fromarray(input_array, mode='L')
 
         depth_image = self.logic.depth_estimator.generateDepth(pil_image)
 
@@ -495,3 +485,270 @@ class AirwayStenosisQuantificationLogic(ScriptedLoadableModuleLogic): # type: ig
     def __init__(self):
         ScriptedLoadableModuleLogic.__init__(self) # type: ignore
         self.depth_estimator = None
+
+
+_retainedTestWidgets = []
+
+
+class _IdentityDepthEstimator:
+    """Test stand-in for DepthEstimator: returns the input image as the depth map,
+    so the depth map content (and thus thresholds / SI) is fully controlled by the test."""
+    def __init__(self):
+        self.calls = 0
+
+    def generateDepth(self, image):
+        self.calls += 1
+        return image.copy()
+
+
+class AirwayStenosisQuantificationTest(ScriptedLoadableModuleTest): # type: ignore
+    """Run from Slicer via the module's "Reload and Test" button, or headless with:
+        Slicer --no-splash --testing --additional-module-paths <this dir>
+               --python-code "slicer.selfTests['AirwayStenosisQuantification']()"
+    """
+
+    def setUp(self):
+        slicer.mrmlScene.Clear(0)
+        self.widget = None
+
+    def tearDown(self):
+        slicer.mrmlScene.Clear(0)
+        if self.widget is not None:
+            for slot in ("bronchVideo", "expiration", "inspiration"):
+                self.widget._setNodeObserver(None, slot)
+            # Deliberately keep test widgets alive: garbage-collecting a
+            # ScriptedLoadableModuleWidget whose Qt signals are connected to its
+            # bound methods makes Slicer crash on exit.
+            _retainedTestWidgets.append(self.widget)
+            self.widget = None
+
+    def runTest(self):
+        tests = [
+            self.test_DisplayArrayCreatesAndReusesNode,
+            self.test_DepthMapGeneratedOnSelection,
+            self.test_ThresholdImage,
+            self.test_StenosisIndex,
+            self.test_StenosisIndexMissingInputs,
+            self.test_StenosisIndexZeroInspiration,
+            self.test_SnapshotConvertsRGBToGrayscale,
+            self.test_TrailingSingletonVolumeLayout,
+            self.test_BronchVideoDepthUpdatesOnModify,
+            self.test_SetupLayout,
+            self.test_RealDepthEstimator,
+        ]
+        for test in tests:
+            self.setUp()
+            try:
+                test()
+            finally:
+                self.tearDown()
+        self.delayDisplay("All AirwayStenosisQuantification tests passed")
+
+    # ------------------------------------------------------------------ helpers
+
+    def _createWidget(self, depthEstimator=None):
+        parent = slicer.qMRMLWidget()
+        parent.setLayout(qt.QVBoxLayout())
+        parent.setMRMLScene(slicer.mrmlScene)
+        widget = AirwayStenosisQuantificationWidget(parent)
+        # Skip loading the real cGAN; tests inject their own estimator.
+        widget.initializeDepthEstimation = lambda: None
+        widget.setup()
+        widget.logic.depth_estimator = depthEstimator or _IdentityDepthEstimator()
+        self.widget = widget
+        return widget
+
+    @staticmethod
+    def _imageWithBrightPixels(count, value=200, shape=(50, 50)):
+        arr = np.zeros(shape, dtype=np.uint8)
+        arr.flat[:count] = value
+        return arr
+
+    @staticmethod
+    def _addVolume(array2d, name):
+        return slicer.util.addVolumeFromArray(array2d[np.newaxis, ...], name=name)
+
+    @staticmethod
+    def _array(name):
+        node = slicer.util.getFirstNodeByName(name)
+        return None if node is None else slicer.util.arrayFromVolume(node)
+
+    # ------------------------------------------------------------------ tests
+
+    def test_DisplayArrayCreatesAndReusesNode(self):
+        self.delayDisplay("displayArrayInSlicer creates then reuses a node")
+        w = self._createWidget()
+        first = w.displayArrayInSlicer(np.full((10, 20), 7, np.uint8), "Out")
+        self.assertEqual(slicer.util.arrayFromVolume(first).shape, (1, 10, 20))
+        second = w.displayArrayInSlicer(np.full((10, 20), 9, np.uint8), "Out")
+        self.assertEqual(first.GetID(), second.GetID())
+        self.assertEqual(len(slicer.util.getNodes("Out*")), 1)
+        self.assertTrue(np.all(slicer.util.arrayFromVolume(second) == 9))
+
+    def test_DepthMapGeneratedOnSelection(self):
+        self.delayDisplay("Selecting an expiration image creates _Depth and _Threshold")
+        w = self._createWidget()
+        img = self._imageWithBrightPixels(100)
+        node = self._addVolume(img, "Exp")
+        w.expirationSelector.setCurrentNode(node)
+        depth = self._array("Exp_Depth")
+        self.assertIsNotNone(depth)
+        np.testing.assert_array_equal(depth[0], img)
+        self.assertIsNotNone(self._array("Exp_Threshold"))
+
+    def test_ThresholdImage(self):
+        self.delayDisplay("Threshold image is 255 where depth > 2 * slider value")
+        w = self._createWidget()
+        img = np.arange(256, dtype=np.uint8).reshape(16, 16)
+        w.inspirationSelector.setCurrentNode(self._addVolume(img, "Insp"))
+        for sliderValue in (0, 20, 64, 128):
+            w.inspirationThresholdSlider.value = sliderValue
+            thresh = self._array("Insp_Threshold")[0]
+            expected = np.where(img > sliderValue * 2, 255, 0)
+            np.testing.assert_array_equal(thresh, expected)
+
+    def test_StenosisIndex(self):
+        self.delayDisplay("Stenosis index = 1 - exp_count / insp_count")
+        w = self._createWidget()
+        w.expirationSelector.setCurrentNode(self._addVolume(self._imageWithBrightPixels(100), "Exp"))
+        w.inspirationSelector.setCurrentNode(self._addVolume(self._imageWithBrightPixels(400), "Insp"))
+        self.assertEqual(w.siValueLabel.text, "0.7500")
+        self.assertEqual(w.siDetailLabel.text, "Exp: 100 px  |  Insp: 400 px")
+        self.assertIn("#EF5350", w.siValueLabel.styleSheet)
+
+        # Raising the expiration threshold above every pixel -> no expiration area -> SI = 1
+        w.expirationThresholdSlider.value = 128
+        self.assertEqual(w.siValueLabel.text, "1.0000")
+
+        # Equal areas -> SI = 0 (lowest severity color)
+        w.expirationThresholdSlider.value = 35
+        slicer.util.updateVolumeFromArray(w.expirationSelector.currentNode(),
+                                          self._imageWithBrightPixels(400)[np.newaxis, ...])
+        self.assertEqual(w.siValueLabel.text, "0.0000")
+        self.assertIn("#4FC3F7", w.siValueLabel.styleSheet)
+
+    def test_StenosisIndexMissingInputs(self):
+        self.delayDisplay("Stenosis index waits for both images")
+        w = self._createWidget()
+        w.expirationSelector.setCurrentNode(self._addVolume(self._imageWithBrightPixels(100), "Exp"))
+        self.assertEqual(w.siValueLabel.text, "—")
+        self.assertEqual(w.siDetailLabel.text, "Select both images to calculate")
+
+    def test_StenosisIndexZeroInspiration(self):
+        self.delayDisplay("Stenosis index is N/A when inspiration area is zero")
+        w = self._createWidget()
+        w.expirationSelector.setCurrentNode(self._addVolume(self._imageWithBrightPixels(100), "Exp"))
+        w.inspirationSelector.setCurrentNode(self._addVolume(self._imageWithBrightPixels(0), "Insp"))
+        self.assertEqual(w.siValueLabel.text, "N/A")
+        self.assertEqual(w.siDetailLabel.text, "Inspiration pixel count is zero")
+
+    def test_SnapshotConvertsRGBToGrayscale(self):
+        self.delayDisplay("Snapshot copies an RGB video frame as grayscale and refreshes depth")
+        w = self._createWidget()
+        rgb = np.zeros((1, 8, 8, 3), dtype=np.uint8)
+        rgb[..., 0], rgb[..., 1], rgb[..., 2] = 30, 90, 210  # mean = 110
+        video = slicer.util.addVolumeFromArray(rgb, name="Video", nodeClassName="vtkMRMLVectorVolumeNode")
+        target = self._addVolume(np.zeros((8, 8), np.uint8), "Exp")
+        w.bronchVideoSelector.setCurrentNode(video)
+        w.expirationSelector.setCurrentNode(target)
+
+        w.onSnapshotExpiration()
+        snap = slicer.util.arrayFromVolume(target)
+        self.assertEqual(snap.shape, (1, 8, 8))
+        self.assertTrue(np.all(snap == 110))
+        # Observer on the expiration node regenerates its depth map
+        self.assertTrue(np.all(self._array("Exp_Depth") == 110))
+
+        # No target selected -> no-op
+        w.inspirationSelector.setCurrentNode(None)
+        w.onSnapshotInspiration()
+
+    def test_TrailingSingletonVolumeLayout(self):
+        self.delayDisplay("(H, W, 1) volumes are handled like (1, H, W)")
+        w = self._createWidget()
+        img = self._imageWithBrightPixels(300, shape=(40, 40))
+        img[5, 30] = 255  # break symmetry so a transpose would be caught
+
+        # Video and expiration image both arrive as (H, W, 1)
+        video = slicer.util.addVolumeFromArray(img[..., np.newaxis], name="Video")
+        self.assertEqual(slicer.util.arrayFromVolume(video).shape, (40, 40, 1))
+        w.bronchVideoSelector.setCurrentNode(video)
+        np.testing.assert_array_equal(self._array("Video_Depth")[0], img)
+
+        exp = slicer.util.addVolumeFromArray(img[..., np.newaxis], name="Exp")
+        w.expirationSelector.setCurrentNode(exp)
+        np.testing.assert_array_equal(self._array("Exp_Depth")[0], img)
+
+        # Inspiration image in the usual (1, H, W) layout -> SI computes across layouts
+        w.inspirationSelector.setCurrentNode(self._addVolume(img, "Insp"))
+        self.assertEqual(w.siValueLabel.text, "0.0000")
+
+        # Snapshot from an (H, W, 1) video into the inspiration image
+        w.onSnapshotInspiration()
+        snap = slicer.util.arrayFromVolume(w.inspirationSelector.currentNode())
+        self.assertEqual(snap.shape, (1, 40, 40))
+        np.testing.assert_array_equal(snap[0], img)
+
+    def test_BronchVideoDepthUpdatesOnModify(self):
+        self.delayDisplay("Bronchoscope depth map follows video updates")
+        estimator = _IdentityDepthEstimator()
+        w = self._createWidget(estimator)
+        video = self._addVolume(np.full((8, 8), 10, np.uint8), "Video")
+        w.bronchVideoSelector.setCurrentNode(video)
+        self.assertTrue(np.all(self._array("Video_Depth") == 10))
+        calls = estimator.calls
+        slicer.util.updateVolumeFromArray(video, np.full((1, 8, 8), 50, np.uint8))
+        self.assertGreater(estimator.calls, calls)
+        self.assertTrue(np.all(self._array("Video_Depth") == 50))
+
+        # Deselecting removes the observer
+        w.bronchVideoSelector.setCurrentNode(None)
+        calls = estimator.calls
+        slicer.util.updateVolumeFromArray(video, np.full((1, 8, 8), 90, np.uint8))
+        self.assertEqual(estimator.calls, calls)
+
+    def test_SetupLayout(self):
+        layoutManager = slicer.app.layoutManager()
+        if layoutManager is None:
+            self.delayDisplay("Skipping layout test (no main window)")
+            return
+        self.delayDisplay("Set Up Layout assigns volumes to slice views")
+        w = self._createWidget()
+        video = self._addVolume(self._imageWithBrightPixels(100), "Video")
+        exp = self._addVolume(self._imageWithBrightPixels(100), "Exp")
+        insp = self._addVolume(self._imageWithBrightPixels(400), "Insp")
+        w.bronchVideoSelector.setCurrentNode(video)
+        w.expirationSelector.setCurrentNode(exp)
+        w.inspirationSelector.setCurrentNode(insp)
+        w.onSetupLayout()
+        self.assertEqual(layoutManager.layout, slicer.vtkMRMLLayoutNode.SlicerLayoutFourByTwoSliceView)
+
+        def composite(name):
+            return layoutManager.sliceWidget(name).mrmlSliceCompositeNode()
+
+        expected = {
+            "Red": "Video", "Slice5": "Video_Depth",
+            "Yellow": "Exp", "Green": "Exp_Depth", "Slice4": "Exp_Threshold",
+            "Slice6": "Insp", "Slice7": "Insp_Depth", "Slice8": "Insp_Threshold",
+        }
+        for sliceName, nodeName in expected.items():
+            self.assertEqual(composite(sliceName).GetBackgroundVolumeID(),
+                             slicer.util.getNode(nodeName).GetID(), sliceName)
+        self.assertEqual(composite("Yellow").GetForegroundVolumeID(), slicer.util.getNode("Exp_Threshold").GetID())
+        self.assertEqual(composite("Slice6").GetForegroundVolumeID(), slicer.util.getNode("Insp_Threshold").GetID())
+
+    def test_RealDepthEstimator(self):
+        try:
+            from StenosisUtils.depth_estimation import DepthEstimator
+        except ImportError as e:
+            self.delayDisplay(f"Skipping real model test ({e})")
+            return
+        self.delayDisplay("Real depth estimator produces a 200x200 depth map")
+        w = self._createWidget(DepthEstimator())
+        yy, xx = np.mgrid[:200, :200]
+        img = np.where(np.hypot(yy - 100, xx - 100) < 50, 40, 220).astype(np.uint8)
+        depthNode = w.generateDepthMap(self._addVolume(img, "Frame"))
+        depth = slicer.util.arrayFromVolume(depthNode)
+        self.assertEqual(depthNode.GetName(), "Frame_Depth")
+        self.assertEqual(depth.shape, (1, 200, 200))
+        self.assertGreater(depth.std(), 0)

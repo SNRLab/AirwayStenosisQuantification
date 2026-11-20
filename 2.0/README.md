@@ -53,3 +53,21 @@ SI = 1 - (expiration_pixels / inspiration_pixels)
 ```
 
 Where pixel counts are the number of pixels in each depth map exceeding their respective threshold value (× 2).
+
+## Testing
+
+**Depth estimation (standalone, no Slicer needed)** — requires `torch`, `torchvision`, `Pillow`, `numpy`:
+
+```bash
+cd 2.0
+python -m unittest discover -s tests -v
+```
+
+**Module self-test (inside Slicer)** — enable Developer Mode and click **Reload and Test** in the module panel, or run headless:
+
+```bash
+Slicer --no-splash --testing --additional-module-paths path/to/2.0 \
+  --python-code "slicer.selfTests['AirwayStenosisQuantification'](); slicer.app.exit(0)"
+```
+
+The self-test swaps in a stand-in depth estimator, so threshold and stenosis-index results are exact. It also runs the real model once, if `torch` is installed in Slicer.
