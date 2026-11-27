@@ -1,0 +1,70 @@
+name: Slicer self-tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  self-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      SLICER_VERSION: "5.6.2"
+      SLICER_DIR: ${{ github.workspace }}/../slicer
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install system libraries
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xvfb libglu1-mesa libpulse-mainloop-glib0 libnss3 \
+            libxcomposite1 libxcursor1 libxi6 libxrandr2 libxtst6 libxkbcommon-x11-0 \
+            libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 \
+            libxcb-shape0 libxcb-xinerama0 libxcb-xkb1 libxdamage1 libxss1 libgl1 libegl1 \
+            libsm6 libfontconfig1 libdbus-1-3
+
+      - name: Download 3D Slicer
+        run: |
+          url=$(curl -sSL "https://download.slicer.org/find?os=linux&stability=release&version=${SLICER_VERSION}" \
+            | python3 -c "import sys, json; print('https://download.slicer.org' + json.load(sys.stdin)['download_url'])")
+          mkdir -p "$SLICER_DIR"
+          curl -sSL "$url" | tar xz -C "$SLICER_DIR" --strip-components=1
+          "$SLICER_DIR/bin/PythonSlicer" --version
+
+      - name: Install Python packages into Slicer
+        run: |
+          "$SLICER_DIR/bin/PythonSlicer" -m pip install -q torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          "$SLICER_DIR/bin/PythonSlicer" -m pip install -q Pillow
+
+      - name: Run self-tests
+        run: |
+          cat > "$RUNNER_TEMP/run_selftest.py" <<'EOF'
+          import sys, traceback
+          import slicer
+          from slicer.ScriptedLoadableModule import ScriptedLoadableModuleTest
+          moduleName = sys.argv[-1]
+          # Print each test step; delayDisplay messages are not shown in headless runs otherwise
+          _delayDisplay = ScriptedLoadableModuleTest.delayDisplay
+          def _printingDelayDisplay(self, message, *args, **kwargs):
+              print(f"  {message}", flush=True)
+              return _delayDisplay(self, message, *args, **kwargs)
+          ScriptedLoadableModuleTest.delayDisplay = _printingDelayDisplay
+          exitCode = 1
+          if moduleName not in slicer.selfTests:
+              print(f"ERROR: no self-test found for module '{moduleName}'. Did the module load?", flush=True)
+          else:
+              try:
+                  print(f"Running {moduleName} self-test", flush=True)
+                  slicer.selfTests[moduleName]()
+                  print(f"RESULT: {moduleName} self-test PASSED", flush=True)
+                  exitCode = 0
+              except Exception:
+                  traceback.print_exc()
+                  print(f"RESULT: {moduleName} self-test FAILED", flush=True)
+          slicer.util.exit(exitCode)
+          EOF
+          xvfb-run -a "$SLICER_DIR/Slicer" --no-splash --testing \
+            --additional-module-paths "$GITHUB_WORKSPACE/2.0" \
+            --python-script "$RUNNER_TEMP/run_selftest.py" AirwayStenosisQuantification
